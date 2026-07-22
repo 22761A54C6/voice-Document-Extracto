@@ -2,10 +2,12 @@ import os
 import tempfile
 import json
 import uuid
+import logging
 from typing import List
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi.responses import JSONResponse
 
 from app.config import HOST, PORT, ALLOWED_AUDIO_CONTENT_TYPES, MAX_FILE_SIZE_BYTES
 from app.voice_service import transcribe_audio
@@ -14,7 +16,19 @@ from app.embeddings import embed_and_store
 from app.models import Product
 from app.database import db
 
+logger = logging.getLogger("uvicorn.error")
+
 app = FastAPI(title="Voice AI Extraction Service")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"Unhandled error on {request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An unexpected error occurred. Please try again."},
+    )
+
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host=HOST, port=PORT, reload=True)

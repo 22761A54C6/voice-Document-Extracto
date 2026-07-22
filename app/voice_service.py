@@ -1,4 +1,5 @@
 from faster_whisper import WhisperModel
+from fastapi import HTTPException
 
 from app.config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE
 
@@ -11,6 +12,9 @@ print("[voice_service] model loaded")
 
 
 def transcribe_audio(input_path: str) -> str:
-    segments, info = _model.transcribe(input_path, beam_size=5)
-    text = " ".join(segment.text.strip() for segment in segments)
-    return text.strip()
+    try:
+        segments, info = _model.transcribe(input_path, beam_size=5)
+        text = " ".join(segment.text.strip() for segment in segments)
+        return text.strip()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Audio transcription failed: {e}")
