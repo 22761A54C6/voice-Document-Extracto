@@ -29,9 +29,14 @@ This service processes audio files to:
 
 ## Installation
 
+**Repository URL:**
+```
+https://github.com/22761A54C6/Voice-Ai-Service.git
+```
+
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/22761A54C6/Voice-Ai-Service.git
    cd voice-ai-service
    ```
 
