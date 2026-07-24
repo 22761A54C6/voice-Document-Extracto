@@ -1,4 +1,5 @@
 import uuid
+import logging
 from typing import List
 
 from google import genai
@@ -9,6 +10,9 @@ from app.config import GEMINI_API_KEY, GEMINI_EMBED_MODEL, GEMINI_EMBED_DIMENSIO
 from app.database import db
 from app.matching import classify_match
 from app.normalization import normalize_product_names_batch
+
+logger = logging.getLogger(__name__)
+
 
 _client = genai.Client()  # reads GEMINI_API_KEY from env automatically
 _TASK_TYPE = {"document": "RETRIEVAL_DOCUMENT", "query": "RETRIEVAL_QUERY"}
@@ -66,18 +70,18 @@ def get_embeddings_batch(texts: List[str], input_type: str = "document") -> List
 
 def embed_and_store(products: List[dict], batch_id: str = None) -> List[dict]:
     if not products:
-        print("[embed_and_store] no products to store")
+        logger.info("No products to store")
         return []
 
     raw_names = [p["name"] for p in products]
     normalized_names = normalize_product_names_batch(raw_names)
-    print(f"[embed_and_store] normalized {len(normalized_names)} names via Gemini")
+    logger.info(f"Normalized {len(normalized_names)} names via Gemini")
 
     # Let embedding failures propagate -- silently returning [] here previously
     # made callers believe storage succeeded with 0 products saved.
     embeddings = get_embeddings_batch(normalized_names, input_type="document")
 
-    print(f"[embed_and_store] {len(normalized_names)} names in, {len(embeddings)} embeddings out")
+    logger.info(f"{len(normalized_names)} names in, {len(embeddings)} embeddings out")
     if len(embeddings) != len(normalized_names):
         raise HTTPException(
             status_code=502,
@@ -102,14 +106,14 @@ def embed_and_store(products: List[dict], batch_id: str = None) -> List[dict]:
                 "matchStatus": classification["status"],
             })
         except Exception as e:
-            print(f"[embed_and_store] failed to process '{product.get('name')}': {e}")
+            logger.error(f"Failed to process product '{product.get('name')}': {e}")
 
-    print(f"[embed_and_store] {len(products)} extracted, {len(docs)} survived to insert")
+    logger.info(f"{len(products)} extracted, {len(docs)} survived to insert")
 
     if not docs:
-        print("[embed_and_store] all products failed to process, nothing inserted")
+        logger.warning("All products failed to process, nothing inserted")
         return []
 
     result = db.products.insert_many(docs)
-    print(f"[embed_and_store] inserted {len(result.inserted_ids)} of {len(products)} products")
+    logger.info(f"Inserted {len(result.inserted_ids)} of {len(products)} products")
     return docs

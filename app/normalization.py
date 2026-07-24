@@ -1,9 +1,13 @@
 import json
+import logging
 
 from google.genai.types import GenerateContentConfig
 from google import genai
 
 from app.config import GEMINI_API_KEY, GEMINI_TEXT_MODEL
+
+logger = logging.getLogger(__name__)
+
 
 _client = genai.Client()
 
@@ -38,7 +42,7 @@ def normalize_product_names_batch(raw_names: list[str]) -> list[str]:
         return []
 
     if not GEMINI_API_KEY:
-        print("[normalize] GEMINI_API_KEY not set, falling back to basic cleanup")
+        logger.warning("GEMINI_API_KEY not set, falling back to basic cleanup")
         return [_basic_fallback(n) for n in raw_names]
 
     try:
@@ -58,8 +62,8 @@ def normalize_product_names_batch(raw_names: list[str]) -> list[str]:
         normalized = json.loads(text_out)
 
         if not isinstance(normalized, list) or len(normalized) != len(raw_names):
-            print(f"[normalize] batch result mismatch ({len(normalized) if isinstance(normalized, list) else 'not a list'} "
-                  f"vs {len(raw_names)} expected), falling back for all")
+            logger.warning(f"Batch result mismatch ({len(normalized) if isinstance(normalized, list) else 'not a list'} "
+                          f"vs {len(raw_names)} expected), falling back for all")
             return [_basic_fallback(n) for n in raw_names]
 
         # Per-item safety net: any malformed entry (code, multi-line, too long) falls back individually
@@ -72,7 +76,7 @@ def normalize_product_names_batch(raw_names: list[str]) -> list[str]:
         return result
 
     except Exception as e:
-        print(f"[normalize] Gemini batch normalization failed: {e}, falling back for all")
+        logger.error(f"Gemini batch normalization failed: {e}, falling back for all")
         return [_basic_fallback(n) for n in raw_names]
 
 

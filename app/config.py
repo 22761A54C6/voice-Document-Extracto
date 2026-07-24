@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PORT = int(os.environ.get("PORT", 6001))
-HOST = os.environ.get("HOST", "0.0.0.0")
+HOST = os.environ.get("HOST", "localhost")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_EMBED_MODEL = "gemini-embedding-001"

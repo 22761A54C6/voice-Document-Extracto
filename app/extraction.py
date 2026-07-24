@@ -1,6 +1,7 @@
 import re
 import json
 import time
+import logging
 from typing import List
 
 from fastapi import HTTPException
@@ -8,6 +9,9 @@ from google import genai
 from google.genai.types import GenerateContentConfig
 
 from app.config import GEMINI_API_KEY, GEMINI_TEXT_MODEL
+
+logger = logging.getLogger(__name__)
+
 
 _client = genai.Client()
 
@@ -50,7 +54,7 @@ match, go back and find what's missing.
             error_str = str(e)
             if "503" in error_str or "UNAVAILABLE" in error_str or "overloaded" in error_str.lower():
                 wait = 2 ** attempt  # 1s, 2s, 4s
-                print(f"[extract] Gemini overloaded (attempt {attempt + 1}/{max_retries}), retrying in {wait}s")
+                logger.warning(f"Gemini overloaded (attempt {attempt + 1}/{max_retries}), retrying in {wait}s")
                 time.sleep(wait)
                 continue
             # Non-retryable error -- fail immediately
@@ -71,8 +75,7 @@ match, go back and find what's missing.
         pass
 
     if finish_reason == "MAX_TOKENS":
-        print(f"[extract] WARNING: Gemini hit max_output_tokens, response was truncated. "
-              f"Attempting to salvage partial output.")
+        logger.warning("Gemini hit max_output_tokens, response was truncated. Attempting to salvage partial output.")
 
     if not text_out:
         raise HTTPException(status_code=502, detail="Gemini returned an empty response")
@@ -94,7 +97,7 @@ match, go back and find what's missing.
             except json.JSONDecodeError:
                 continue
         if products:
-            print(f"[extract] WARNING: recovered {len(products)} products from truncated/malformed output")
+            logger.warning(f"Recovered {len(products)} products from truncated/malformed output")
             return products
 
     raise HTTPException(status_code=502, detail=f"No JSON array found in LLM output: {text_out[:300]}")
