@@ -141,4 +141,9 @@ def configure_logging() -> None:
     root.setLevel(LOG_LEVEL)
     root.handlers = handlers
 
+    # Suppress verbose logs from external libraries
+    logging.getLogger('google_genai').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('faster_whisper').setLevel(logging.WARNING)
+
     _configured = True
