@@ -7,7 +7,6 @@ class Product(BaseModel):
     id: str
     batchId: Optional[str] = None
     name: str
-    normalizedName: Optional[str] = None
     price: float
     matchedCategory: Optional[str] = None
     matchedCategorySourceId: Optional[str] = None

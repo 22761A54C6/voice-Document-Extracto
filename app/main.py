@@ -5,22 +5,29 @@ import uuid
 import logging
 import time
 from typing import List
+from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Body
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import HOST, PORT, ALLOWED_AUDIO_CONTENT_TYPES, MAX_FILE_SIZE_BYTES
 from app.voice_service import transcribe_audio
 from app.extraction import extract_products_with_llm
+# from app.extraction import translate_to_english_with_gemini
 from app.embeddings import embed_and_store
 from app.models import Product
 from app.database import db
 from app.logging_config import configure_logging
+from app.ollama_service import translate_to_english, correct_text, generate_short_description
 
 logger = logging.getLogger(__name__)
+
+
+class TextCorrectionRequest(BaseModel):
+    text: str
 
 
 class HTTPRequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -115,7 +122,7 @@ async def extract_voice(file: UploadFile = File(...)):
             normalized_products.append({"name": p["name"], "price": float(price)})
 
         products = normalized_products
-        logger.info(f"{len(products)} products after normalization: "
+        logger.info(f"{len(products)} products ready for processing: "
                     f"{json.dumps(products, ensure_ascii=False)}")
 
         if not products:
@@ -156,8 +163,7 @@ def get_voice_products_by_batch(batch_id: str):
             "id": doc["_id"],
             "batchId": doc.get("batchId"),
             "name": doc.get("name"),
-            "normalizedName": doc.get("normalizedName"),
-            "price": doc.get("price"),
+            "price": doc.get("price", 0.0),
             "matchedCategory": doc.get("matchedCategory"),
             "matchedCategorySourceId": doc.get("matchedCategorySourceId"),
             "matchedCategoryScore": doc.get("matchedCategoryScore"),
@@ -170,6 +176,83 @@ def get_voice_products_by_batch(batch_id: str):
 
     logger.info(f"Successfully retrieved {len(products)} products for batch_id: {batch_id}")
     return products
+
+
+@app.post("/correct-voice")
+async def correct_voice(file: UploadFile = File(...)):
+    logger.info("Voice correct endpoint hit")
+
+    if file.content_type not in ALLOWED_AUDIO_CONTENT_TYPES:
+        logger.warning(f"Unsupported file type: {file.content_type}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {file.content_type}. Allowed: {sorted(ALLOWED_AUDIO_CONTENT_TYPES)}"
+        )
+
+    contents = await file.read()
+    if not contents:
+        logger.warning("Uploaded file is empty")
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    if len(contents) > MAX_FILE_SIZE_BYTES:
+        logger.warning(f"File too large: {len(contents)} bytes")
+        raise HTTPException(status_code=400, detail="File too large (max 15MB)")
+
+    suffix = os.path.splitext(file.filename or "")[1] or ".mp3"
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        raw_text = transcribe_audio(tmp_path)
+        logger.info(f"Transcribed text: {raw_text!r}")
+
+        if not raw_text.strip():
+            logger.warning("No speech detected in audio")
+            raise HTTPException(status_code=422, detail="No speech detected in audio")
+
+        translated_text = translate_to_english(raw_text)
+        # translated_text = translate_to_english_with_gemini(raw_text)
+        logger.info(f"Translated text: {translated_text!r}")
+
+        short_description = generate_short_description(translated_text)
+        logger.info(f"Short description: {short_description!r}")
+
+        logger.info("Successfully processed voice translation")
+        return {
+            "original_text": raw_text,
+            "corrected_text": translated_text,
+            "short_description": short_description
+        }
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+@app.post("/correct-text")
+async def correct_text_endpoint(request: TextCorrectionRequest):
+    logger.info("Text correction endpoint hit")
+    
+    if not request.text or not request.text.strip():
+        logger.warning("Empty text provided")
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    try:
+        corrected_text = correct_text(request.text)
+        logger.info(f"Corrected text: {corrected_text!r}")
+        
+        short_description = generate_short_description(corrected_text)
+        logger.info(f"Short description: {short_description!r}")
+        
+        logger.info("Successfully processed text correction")
+        return {
+            "original_text": request.text,
+            "corrected_text": corrected_text,
+            "short_description": short_description
+        }
+    except Exception as e:
+        logger.error(f"Text correction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Text correction failed: {e}")
 
 
 @app.get("/health")

@@ -9,7 +9,6 @@ from fastapi import HTTPException
 from app.config import GEMINI_API_KEY, GEMINI_EMBED_MODEL, GEMINI_EMBED_DIMENSIONS
 from app.database import db
 from app.matching import classify_match
-from app.normalization import normalize_product_names_batch
 
 logger = logging.getLogger(__name__)
 
@@ -74,31 +73,28 @@ def embed_and_store(products: List[dict], batch_id: str = None) -> List[dict]:
         return []
 
     raw_names = [p["name"] for p in products]
-    normalized_names = normalize_product_names_batch(raw_names)
-    logger.info(f"Normalized {len(normalized_names)} names via Gemini")
 
     # Let embedding failures propagate -- silently returning [] here previously
     # made callers believe storage succeeded with 0 products saved.
-    embeddings = get_embeddings_batch(normalized_names, input_type="document")
+    embeddings = get_embeddings_batch(raw_names, input_type="document")
 
-    logger.info(f"{len(normalized_names)} names in, {len(embeddings)} embeddings out")
-    if len(embeddings) != len(normalized_names):
+    logger.info(f"{len(raw_names)} names in, {len(embeddings)} embeddings out")
+    if len(embeddings) != len(raw_names):
         raise HTTPException(
             status_code=502,
             detail=f"Embedding count mismatch: got {len(embeddings)} embeddings for "
-                   f"{len(normalized_names)} products"
+                   f"{len(raw_names)} products"
         )
 
     docs = []
-    for product, normalized_name, embedding in zip(products, normalized_names, embeddings):
+    for product, embedding in zip(products, embeddings):
         try:
             classification = classify_match(embedding)
             docs.append({
                 "_id": str(uuid.uuid4()),
                 "batchId": batch_id,
                 "name": product["name"],
-                "normalizedName": normalized_name,
-                "price": product.get("price"),
+                "price": product.get("price", 0.0),
                 "embedding": embedding,
                 "matchedCategory": classification["matchedCategory"],
                 "matchedCategorySourceId": classification["matchedCategorySourceId"],
