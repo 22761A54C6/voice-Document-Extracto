@@ -1,0 +1,14 @@
+[project]
+name = "voice-ai-service"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "python-multipart==0.0.9",
+    "pydantic==2.13.4",
+    "faster-whisper>=1.0.0",
+    "pymongo==4.9.2",
+    "python-dotenv==1.0.1",
+    "google-genai>=2.31.0",
+]

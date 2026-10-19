@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Menu Extractor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #EDEFF1;
+  --surface: #FFFFFF;
+  --surface-2: #F6F7F8;
+  --ink: #18212B;
+  --muted: #5B6672;
+  --line: #D5DAE0;
+  --accent: #D9930D;
+  --accent-ink: #7A4E00;
+  --accent-soft: #FBF1DC;
+  --done: #2E6B4E;
+  --danger: #B42318;
+  --danger-soft: #FDECEA;
+  --radius-lg: 14px;
+  --radius-sm: 8px;
+  --font: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12171D; --surface: #1A2128; --surface-2: #212A32; --ink: #E8ECEF; --muted: #9AA5B0;
+    --line: #2E3842; --accent: #E8A92E; --accent-ink: #F2C46A; --accent-soft: #2E2615;
+    --done: #5DB38A; --danger: #F07167; --danger-soft: #3A1E1C; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font);
+  font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+}
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.page { max-width: 1240px; margin: 0 auto; padding: 32px 24px 64px; }
+.masthead { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
+.masthead h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+.masthead p { margin: 0; color: var(--muted); max-width: 52ch; }
+
+.layout { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 24px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 22px; }
+.panel h2 { font-size: 17px; font-weight: 700; margin: 0 0 14px; }
+
+/* Recorder */
+.recorder { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.mic { flex: none; width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--ink); color: var(--surface); cursor: pointer; display: grid; place-items: center; }
+.mic svg { width: 24px; height: 24px; }
+.mic.recording { background: var(--danger); color: #fff; animation: pulse 1.4s ease-in-out infinite; }
+.mic:disabled { opacity: .45; cursor: not-allowed; }
+.recorder strong { display: block; }
+.recorder span { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(180,35,24,.18); } }
+.or { text-align: center; color: var(--muted); font-size: 13px; margin: 12px 0; }
+
+/* Drop zone */
+.drop { position: relative; display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 22px 16px; text-align: center; cursor: pointer; background: var(--surface-2); transition: border-color .15s, background .15s; }
+.drop:hover, .drop.dragover { border-color: var(--accent); background: var(--accent-soft); }
+.drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.drop strong { display: block; font-size: 16px; }
+.drop span { color: var(--muted); font-size: 13px; }
+.drop.has-file strong { color: var(--accent-ink); word-break: break-all; }
+audio { display: none; width: 100%; margin-top: 12px; }
+
+.run { width: 100%; margin-top: 16px; padding: 13px; border: 0; border-radius: 10px; background: var(--ink); color: var(--surface); font-weight: 700; font-size: 16px; cursor: pointer; }
+.run:hover:not(:disabled) { background: #000; }
+.run:disabled { opacity: .45; cursor: not-allowed; }
+@media (prefers-color-scheme: dark) {
+  .run, .mic { background: var(--accent); color: #1A1305; }
+  .run:hover:not(:disabled) { background: #F2B947; }
+}
+
+.error { display: none; margin-top: 14px; padding: 11px 13px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-weight: 500; }
+.error.show { display: block; }
+
+/* Pipeline */
+.pipeline { list-style: none; margin: 20px 0 0; padding: 16px 0 0; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.pipeline li { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 10px; color: var(--muted); }
+.dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.pipeline li.active { color: var(--ink); }
+.pipeline li.active .dot { border-color: var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; }
+.pipeline li.done { color: var(--ink); }
+.pipeline li.done .dot { border-color: var(--done); background: var(--done); color: var(--surface); }
+.pipeline li.done .dot::after { content: "✓"; }
+.pipeline li.failed .dot { border-color: var(--danger); background: var(--danger); color: #fff; }
+.pipeline li.failed .dot::after { content: "!"; }
+.pipeline time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted); }
+.bar { height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin-top: 14px; }
+.bar div { height: 100%; width: 0; background: var(--accent); transition: width .3s ease; }
+.status { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 1.5em; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Results */
+.results-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.results-head h2 { margin: 0; }
+.tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.tool { border: 1px solid var(--line); background: var(--surface); padding: 7px 12px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.tool:hover { border-color: var(--ink); }
+.tool[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.summary { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--muted); font-size: 13px; margin-bottom: 18px; font-variant-numeric: tabular-nums; }
+.summary b { color: var(--ink); font-weight: 600; }
+
+.empty { text-align: center; padding: 56px 16px; color: var(--muted); }
+.empty strong { display: block; color: var(--ink); font-size: 17px; margin-bottom: 4px; }
+
+.menu { list-style: none; margin: 0; padding: 0; }
+.item { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.item:first-child { padding-top: 4px; }
+.line { display: flex; align-items: baseline; gap: 10px; }
+.leader { flex: 1; border-bottom: 2px dotted var(--line); transform: translateY(-5px); min-width: 24px; }
+.field { border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 2px 6px; margin: 0 -6px; }
+.field:hover { border-color: var(--line); }
+.field:focus { border-color: var(--accent); background: var(--surface-2); outline: none; }
+.name { font-size: 17px; font-weight: 700; min-width: 0; flex: 0 1 auto; width: 100%; max-width: 60%; }
+@media (max-width: 520px) { .name { max-width: 78%; } .leader { min-width: 8px; } .price { width: 72px; } }
+.price { width: 92px; text-align: right; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.desc { display: block; width: 100%; color: var(--muted); resize: none; margin-top: 2px; line-height: 1.45; field-sizing: content; min-height: 1.6em; }
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.meta label { display: inline-flex; align-items: center; gap: 4px; }
+.meta input { width: 56px; font-variant-numeric: tabular-nums; }
+.tag { padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; font-size: 12px; }
+.tag.none { background: var(--surface-2); color: var(--muted); font-weight: 500; }
+.variants { list-style: none; margin: 8px 0 0 18px; padding: 0; }
+.variants li { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 14px; }
+.variants .vname { width: 40%; max-width: 220px; }
+.variants .vqty { width: 54px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.variants .price { font-size: 15px; font-weight: 600; width: 80px; }
+.link { border: 0; background: none; padding: 2px 4px; color: var(--muted); font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.link:hover { color: var(--ink); }
+.link.danger:hover { color: var(--danger); }
+.item-actions { display: flex; gap: 8px; margin-top: 6px; }
+.add-product { margin-top: 16px; }
+.json { margin: 0; padding: 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; max-height: 640px; overflow: auto; white-space: pre; }
+
+.printing .item { animation: print .35s ease-out both; }
+@keyframes print { from { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="masthead">
+    <h1>Voice menu extractor</h1>
+    <p>Read your menu out loud or upload a recording. Products, prices and sizes come back ready to edit and copy.</p>
+  </header>
+
+  <div class="layout">
+    <section class="panel" aria-labelledby="input-title">
+      <h2 id="input-title">Recording</h2>
+      <div class="recorder">
+        <button class="mic" id="mic" aria-label="Start recording">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+        <div>
+          <strong id="rec-title">Record from microphone</strong>
+          <span id="rec-hint">Say each item with its price, e.g. “Masala dosa, 120 rupees”</span>
+        </div>
+      </div>
+      <div class="or">or</div>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="audio/*">
+        <strong id="drop-title">Drop an audio file here</strong>
+        <span id="drop-hint">or click to choose · MP3, M4A, WAV, WebM, OGG up to 5 MB</span>
+      </label>
+      <audio id="player" controls></audio>
+
+      <button class="run" id="run" disabled>Extract products</button>
+      <div class="error" id="error" role="alert"></div>
+
+      <ol class="pipeline" id="pipeline" aria-label="Progress">
+        <li data-step="transcription"><span class="dot"></span><span>Transcribe speech</span><time></time></li>
+        <li data-step="extraction"><span class="dot"></span><span>Find products</span><time></time></li>
+        <li data-step="embedding"><span class="dot"></span><span>Match categories and save</span><time></time></li>
+      </ol>
+      <div class="bar"><div id="bar"></div></div>
+      <div class="status" id="status" aria-live="polite"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="results-title">
+      <div class="results-head">
+        <h2 id="results-title">Products</h2>
+        <div class="tools" id="tools" hidden>
+          <button class="tool" id="view-toggle" aria-pressed="false">Show JSON</button>
+          <button class="tool" id="copy">Copy JSON</button>
+          <button class="tool" id="download">Download</button>
+        </div>
+      </div>
+      <div class="summary" id="summary"></div>
+      <div class="empty" id="empty"><strong>No products yet</strong>Record or upload audio on the left and run the extraction.</div>
+      <ul class="menu" id="menu"></ul>
+      <button class="tool add-product" id="add-product" hidden>Add product</button>
+      <pre class="json" id="json" hidden></pre>
+    </section>
+  </div>
+</main>
+
+<script>
+const API_BASE_URL = window.location.origin + '__API_PREFIX__';
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const STEPS = ['transcription', 'extraction', 'embedding'];
+const STEP_TIMING = { transcription: 'transcription_ms', extraction: 'llmExtraction_ms', embedding: 'embeddingAndStorage_ms' };
+
+const $ = (id) => document.getElementById(id);
+let file = null;
+let products = [];
+let batchId = '';
+let busy = false;
+let recorder = null;
+let recordTimer = null;
+
+// ---------- Audio input ----------
+function setFile(f) {
+  file = f;
+  $('file').value = '';
+  $('drop').classList.toggle('has-file', Boolean(f));
+  $('drop-title').textContent = f ? f.name : 'Drop an audio file here';
+  $('drop-hint').textContent = f ? `${(f.size / 1024 / 1024).toFixed(2)} MB · click to choose another` : 'or click to choose · MP3, M4A, WAV, WebM, OGG up to 5 MB';
+  const player = $('player');
+  if (f) {
+    player.src = URL.createObjectURL(f);
+    player.style.display = 'block';
+  } else {
+    player.style.display = 'none';
+    player.removeAttribute('src');
+  }
+  $('error').classList.remove('show');
+  if (f && f.size > MAX_FILE_SIZE) showError(`This file is ${(f.size / 1024 / 1024).toFixed(1)} MB. Choose one up to 5 MB.`);
+  updateRunButton();
+}
+
+$('file').addEventListener('change', (e) => e.target.files[0] && setFile(e.target.files[0]));
+['dragenter', 'dragover'].forEach((t) => $('drop').addEventListener(t, (e) => { e.preventDefault(); $('drop').classList.add('dragover'); }));
+['dragleave', 'drop'].forEach((t) => $('drop').addEventListener(t, (e) => { e.preventDefault(); $('drop').classList.remove('dragover'); }));
+$('drop').addEventListener('drop', (e) => e.dataTransfer.files[0] && setFile(e.dataTransfer.files[0]));
+
+function updateRunButton() {
+  $('run').disabled = busy || !file || file.size > MAX_FILE_SIZE || Boolean(recorder);
+  $('mic').disabled = busy;
+}
+
+// ---------- Microphone ----------
+if (!navigator.mediaDevices || !window.MediaRecorder) {
+  $('mic').disabled = true;
+  $('rec-hint').textContent = 'Recording needs a browser with microphone access (HTTPS or localhost).';
+}
+
+$('mic').addEventListener('click', () => (recorder ? stopRecording() : startRecording()));
+
+async function startRecording() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    showError('Microphone access was blocked. Allow it in the browser address bar, or upload a file instead.');
+    return;
+  }
+  const chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    // The service checks the bare content type, so drop codec parameters such as ";codecs=opus".
+    const type = (recorder.mimeType || 'audio/webm').split(';')[0];
+    const ext = type.includes('mp4') ? 'm4a' : type.split('/')[1];
+    recorder = null;
+    clearInterval(recordTimer);
+    setRecordingUi(false);
+    setFile(new File(chunks, `recording.${ext}`, { type }));
+  };
+  recorder.start();
+  setRecordingUi(true);
+  const started = Date.now();
+  recordTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - started) / 1000);
+    $('rec-hint').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} · click to stop`;
+  }, 250);
+}
+
+function stopRecording() {
+  recorder.stop();
+}
+
+function setRecordingUi(on) {
+  $('mic').classList.toggle('recording', on);
+  $('mic').setAttribute('aria-label', on ? 'Stop recording' : 'Start recording');
+  $('rec-title').textContent = on ? 'Recording…' : 'Record from microphone';
+  $('rec-hint').textContent = on ? '0:00 · click to stop' : 'Say each item with its price, e.g. “Masala dosa, 120 rupees”';
+  updateRunButton();
+}
+
+// ---------- Pipeline display ----------
+function resetPipeline() {
+  document.querySelectorAll('#pipeline li').forEach((li) => {
+    li.className = '';
+    li.querySelector('time').textContent = '';
+  });
+  $('bar').style.width = '0';
+  $('status').textContent = '';
+}
+
+function markStep(step, state) {
+  const target = STEPS.indexOf(step);
+  document.querySelectorAll('#pipeline li').forEach((li) => {
+    const i = STEPS.indexOf(li.dataset.step);
+    if (i < target) li.className = 'done';
+    if (i === target) li.className = state;
+  });
+}
+
+function showError(message) {
+  $('error').textContent = message;
+  $('error').classList.add('show');
+  const active = document.querySelector('#pipeline li.active');
+  if (active) active.className = 'failed';
+}
+
+// ---------- Run ----------
+$('run').addEventListener('click', run);
+
+async function run() {
+  busy = true;
+  updateRunButton();
+  $('error').classList.remove('show');
+  resetPipeline();
+  $('status').textContent = 'Uploading…';
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/voice`, { method: 'POST', body: form });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `Request failed (HTTP ${response.status})`);
+    }
+    await readEvents(response, handleEvent);
+  } catch (err) {
+    showError(err.message);
+    $('status').textContent = '';
+  } finally {
+    busy = false;
+    updateRunButton();
+  }
+}
+
+async function readEvents(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop();
+    for (const chunk of chunks) {
+      const line = chunk.split('\n').find((l) => l.startsWith('data: '));
+      if (line) onEvent(JSON.parse(line.slice(6)));
+    }
+  }
+}
+
+function handleEvent(event) {
+  if (event.batchId) {
+    showResults(event);
+    return;
+  }
+  if (event.stage === 'error') {
+    showError(event.message);
+    return;
+  }
+  if (typeof event.progress === 'number') $('bar').style.width = `${event.progress}%`;
+  if (event.message) {
+    const progress = typeof event.progress === 'number' ? ` (${Math.round(event.progress)}%)` : '';
+    $('status').textContent = event.message + progress;
+  }
+  if (STEPS.includes(event.stage)) markStep(event.stage, 'active');
+}
+
+// ---------- Results ----------
+function showResults(data) {
+  const timing = data.timingBreakdown || {};
+  document.querySelectorAll('#pipeline li').forEach((li) => {
+    li.className = 'done';
+    const ms = timing[STEP_TIMING[li.dataset.step]];
+    if (ms != null) li.querySelector('time').textContent = `${(ms / 1000).toFixed(2)} s`;
+  });
+  $('bar').style.width = '100%';
+  $('status').textContent = `Done in ${data.processingTime.toFixed(2)} s`;
+
+  products = data.targetFormat;
+  batchId = data.batchId;
+  const tokens = (data.tokenUsage || {}).total_tokens;
+  $('summary').innerHTML =
+    `<span><b>${products.length}</b> products</span>` +
+    `<span><b>${data.processingTime.toFixed(2)} s</b> total</span>` +
+    (tokens ? `<span><b>${tokens}</b> tokens</span>` : '') +
+    `<span>Batch <b title="${batchId}">${batchId}</b></span>`;
+  $('tools').hidden = false;
+  $('add-product').hidden = $('menu').hidden;
+  $('empty').hidden = true;
+  render(true);
+}
+
+function render(printing = false) {
+  const menu = $('menu');
+  menu.classList.toggle('printing', printing);
+  menu.innerHTML = products.map(productHtml).join('');
+  menu.querySelectorAll('.item').forEach((el, i) => { el.style.animationDelay = `${i * 60}ms`; });
+  $('json').textContent = JSON.stringify(products, null, 2);
+}
+
+const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function productHtml(p, i) {
+  const variants = (p.variants || []).map((v, j) => `
+    <li>
+      <input class="field vname" value="${esc(v.name)}" aria-label="Size name" data-i="${i}" data-v="${j}" data-key="name">
+      <span class="leader"></span>
+      <input class="field vqty" type="number" min="0" value="${esc(v.availableQuantity)}" aria-label="Available quantity" title="Available quantity" data-i="${i}" data-v="${j}" data-key="availableQuantity">
+      <input class="field price" type="number" step="0.01" value="${esc(v.vendorPrice)}" aria-label="Size price" data-i="${i}" data-v="${j}" data-key="vendorPrice">
+      <button class="link danger" data-action="del-variant" data-i="${i}" data-v="${j}" aria-label="Remove size ${esc(v.name)}">✕</button>
+    </li>`).join('');
+  const category = p.categoryId
+    ? `<span class="tag" title="Category id ${esc(p.categoryId)}">Category ${esc(p.categoryId.slice(0, 8))}</span>`
+    : '<span class="tag none">No category matched</span>';
+  return `
+  <li class="item">
+    <div class="line">
+      <input class="field name" value="${esc(p.name)}" aria-label="Product name" data-i="${i}" data-key="name">
+      <span class="leader"></span>
+      <input class="field price" type="number" step="0.01" value="${esc(p.price)}" aria-label="Price" data-i="${i}" data-key="price">
+    </div>
+    <textarea class="field desc" rows="1" aria-label="Description" placeholder="Add a description" data-i="${i}" data-key="description">${esc(p.description)}</textarea>
+    <div class="meta">
+      <label>Qty <input class="field" type="number" min="0" value="${esc(p.quantity)}" data-i="${i}" data-key="quantity"></label>
+      <label>Prep <input class="field" type="number" min="0" value="${esc(p.preparationTime)}" data-i="${i}" data-key="preparationTime"> min</label>
+      ${category}
+    </div>
+    ${variants ? `<ul class="variants">${variants}</ul>` : ''}
+    <div class="item-actions">
+      <button class="link" data-action="add-variant" data-i="${i}">Add size</button>
+      <button class="link danger" data-action="del-product" data-i="${i}">Remove product</button>
+    </div>
+  </li>`;
+}
+
+const NUMBER_KEYS = { price: parseFloat, vendorPrice: parseFloat, quantity: (v) => parseInt(v, 10), preparationTime: (v) => parseInt(v, 10), availableQuantity: (v) => parseInt(v, 10) };
+
+$('menu').addEventListener('input', (e) => {
+  const { i, v, key } = e.target.dataset;
+  if (key == null) return;
+  const parse = NUMBER_KEYS[key];
+  const value = parse ? (parse(e.target.value) || 0) : e.target.value;
+  if (v != null) products[i].variants[v][key] = value;
+  else products[i][key] = value;
+  $('json').textContent = JSON.stringify(products, null, 2);
+});
+
+$('menu').addEventListener('click', (e) => {
+  const { action, i, v } = e.target.dataset;
+  if (!action) return;
+  if (action === 'del-product') products.splice(i, 1);
+  if (action === 'del-variant') products[i].variants.splice(v, 1);
+  if (action === 'add-variant') products[i].variants.push({ name: 'New size', vendorPrice: products[i].price || 0, availableQuantity: 0 });
+  render();
+});
+
+$('add-product').addEventListener('click', () => {
+  products.push({ name: 'New product', description: '', categoryId: null, quantity: 0, preparationTime: 0, price: 0, variants: [] });
+  render();
+  $('menu').lastElementChild.querySelector('.name').select();
+});
+
+$('view-toggle').addEventListener('click', () => {
+  const showJson = $('json').hidden;
+  $('json').hidden = !showJson;
+  $('menu').hidden = showJson;
+  $('add-product').hidden = showJson;
+  $('view-toggle').setAttribute('aria-pressed', String(showJson));
+  $('view-toggle').textContent = showJson ? 'Show products' : 'Show JSON';
+});
+
+$('copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(JSON.stringify(products, null, 2));
+  $('copy').textContent = 'Copied';
+  setTimeout(() => { $('copy').textContent = 'Copy JSON'; }, 1500);
+});
+
+$('download').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(products, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `products-${batchId.slice(0, 8) || 'export'}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+</script>
+</body>
+</html>

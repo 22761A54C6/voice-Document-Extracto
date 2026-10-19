@@ -1,451 +1,158 @@
 # Voice AI Service
 
-A FastAPI service that extracts product information from voice/audio input using speech recognition and LLM-powered text extraction.
+FastAPI service that turns a **spoken product/menu description** into a structured product catalog: **faster-whisper** transcribes the audio locally, **Google Gemini** extracts the products, and **MongoDB Atlas Vector Search** maps each product to a catalog category.
 
-## Overview
+Repository: https://github.com/22761A54C6/Voice-Ai-Service
 
-This service processes audio files to:
-1. Transcribe speech to text using Whisper (faster-whisper)
-2. Extract product names and prices using Google Gemini LLM
-3. Normalize product names for search matching
-4. Generate embeddings for category matching
-5. Store products in MongoDB with category classifications
+Sister service: [Image-Text-Pdf AI Service](https://github.com/22761A54C6/image-text-pdf-ai-service) – same pipeline for images/PDFs/text. Both services write to the same MongoDB collections, and the Image-Text-Pdf service maintains the shared category vectors.
 
-## Prerequisites
+## Features
 
-- Python 3.10 or higher Recommended - Python 3.11.10 
-- MongoDB Atlas cluster (or local MongoDB)
-- Google Gemini API key(present using free API Keys)
-   use this link to get free API Keys: https://aistudio.google.com/app/apikey
-   Gemini 3 Models 
-   Gemini 3.6 Flash
-   Gemini 3 Pro
-   Gemini 3.5 Flash-Lite
-   Gemini 2.5 Models
-   Gemini 2.5 Pro
-   Gemini 2.5 Flash
-   Gemini 2.5 Flash-Lite
-- OpenSearch (for logging)
+- **Speech-to-text** – faster-whisper (`small`, CPU, int8) with voice-activity filtering and automatic language detection; audio is processed in memory.
+- **Product parsing** – Gemini returns name, description, price, quantity, preparation time and size variants as JSON.
+- **Complete output** – every product always has every field; defaults are used when the LLM leaves something out.
+- **Category matching** – product names embedded with `gemini-embedding-001` (768 dims) and matched with Atlas Vector Search.
+- **Live progress** – `POST /voice` streams Server-Sent Events; processing stops if the client disconnects.
+- **Health checks** – `/health` checks MongoDB, Gemini and the Whisper model.
+- **Production logging** – two lines per request at INFO (request + result summary), every step at DEBUG, optional JSON output (`LOG_FORMAT=json`); a full trace id and span id on every line, taken from / returned in `X-Trace-Id`.
+- **Test UI** – `GET /voice-products-extract-using-ai` (record or upload audio).
 
-## Installation
+## How it works
 
-**Repository URL:**
 ```
-https://github.com/22761A54C6/Voice-Ai-Service.git
+POST /voice (audio file)
+   │ validate type/size  ──► HTTP 400 on failure
+   ▼
+faster-whisper transcription (worker thread)
+   ▼
+Gemini product extraction (JSON) ─► normalize + default values
+   ▼
+Gemini embeddings (product names, one batch call)
+   ▼
+Atlas $vectorSearch on categories (category_vector_index)
+   ▼
+store batch in products collection ─► SSE result event
 ```
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/22761A54C6/Voice-Ai-Service.git
-   cd voice-ai-service
-   ```
+Step-by-step details and schemas: [API_FLOW.md](API_FLOW.md). Setup and operations: [RUNNING.md](RUNNING.md).
 
-2. **Create virtual environment:**
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate  # Windows
-   # or
-   source venv/bin/activate  # Linux/Mac
-   ```
+## Endpoints
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/voice` | Extract products from an audio file (multipart `file`, max 5 MB) – SSE |
+| GET | `/health` | Checks MongoDB, Gemini and the Whisper model |
+| GET | `/voice-products-extract-using-ai` | Browser test UI |
 
-4. **Configure environment variables:**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your actual values
-   ```
+Supported audio types: `audio/mpeg`, `audio/mp3`, `audio/wav`, `audio/x-wav`, `audio/m4a`, `audio/x-m4a`, `audio/mp4`, `audio/aac`, `audio/ogg`, `audio/webm`, `audio/opus`, `audio/flac`, `audio/x-flac`, `audio/aiff`, `audio/x-aiff`, `audio/wma`, `audio/x-ms-wma`, `audio/amr`, `audio/x-amr`, `audio/3gpp`, `audio/3gpp2`.
+
+## Response format (final SSE event)
+
+```json
+{
+  "batchId": "fe8378dd-…",
+  "sourceType": "audio",
+  "targetFormat": [
+    {
+      "name": "Filter Coffee",
+      "description": "Authentic South Indian filter coffee.",
+      "categoryId": "d376c33b-…",
+      "quantity": 0,
+      "preparationTime": 0,
+      "price": 0.0,
+      "variants": [
+        {"name": "Small", "vendorPrice": 30.0, "availableQuantity": 0},
+        {"name": "Large", "vendorPrice": 50.0, "availableQuantity": 0}
+      ]
+    }
+  ],
+  "processingTime": 3.96,
+  "tokenUsage": {"prompt_tokens": 389, "completion_tokens": 158, "total_tokens": 547},
+  "timingBreakdown": {"fileRead_ms": 0.1, "transcription_ms": 1276, "llmExtraction_ms": 1477, "embeddingAndStorage_ms": 1203, "total_ms": 3957}
+}
+```
+
+Default values when the LLM does not provide a field:
+
+| Field | Default |
+|---|---|
+| `description` | `""` |
+| `price` | `0.0` |
+| `quantity` | `0` |
+| `preparationTime` | `0` (minutes) |
+| `variants` | `[]` |
+| variant `vendorPrice` | the product's `price` |
+| variant `availableQuantity` | `0` |
+| `categoryId` | `null` when no category matched |
 
 ## Configuration
 
-Edit `.env` file with your configuration:
+Copy `.env.example` to `.env`. Required: `MONGO_URI`, `GEMINI_API_KEY`.
 
-### Required Variables
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` / `HOST` / `RELOAD` | `8002` / `0.0.0.0` / `false` | |
+| `MONGO_URI` / `MONGO_DB_NAME` | – / `bizlink_ollama` | **Required.** Same database as Image-Text-Pdf |
+| `GEMINI_API_KEY` | – | **Required** |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Product extraction |
+| `GEMINI_EMBED_MODEL` | `gemini-embedding-001` | Must match the model used for category vectors |
+| `GEMINI_THINKING_LEVEL` | `minimal` | For `gemini-3.8-flash` set `GEMINI_THINKING_BUDGET=0` instead |
+| `GEMINI_TEMPERATURE` / `GEMINI_TIMEOUT_MS` | `0` / `120000` | |
+| `MAX_FILE_SIZE_MB` | `5` | |
+| `WHISPER_MODEL_SIZE` | `small` | `base` is ~2× faster, less accurate |
+| `WHISPER_DEVICE` / `WHISPER_COMPUTE_TYPE` | `cpu` / `int8` | |
+| `WHISPER_BEAM_SIZE` | `1` | |
+| `WHISPER_VAD_FILTER` | `true` | Skip silence |
+| `WHISPER_CPU_THREADS` | all cores | |
+| `WHISPER_LANGUAGE` | auto-detect | Set e.g. `en` to skip detection |
+| `VECTOR_SEARCH_NUM_CANDIDATES` | `768` | |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `text` | `DEBUG` for every step; `json` for log aggregators |
+| `FASTER_WHISPER_LOG_LEVEL` | `WARNING` | |
 
-```env
-# Service
-SERVICE_NAME=voice-service
-PORT=6001
-HOST=localhost
+## Settings, constants and messages
 
-# Gemini API (Required)
-GEMINI_API_KEY=your_actual_gemini_api_key
-GEMINI_TEXT_MODEL=gemini-2.5-flash
-GEMINI_EMBED_MODEL=gemini-embedding-001
-GEMINI_EMBED_DIMENSIONS=512
+No values are hard-coded in the code. They live in three places under `app/core/`:
 
-# MongoDB (Required)
-MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/bizlink
-MONGO_DB_NAME=bizlink
+| File | Holds | Change it by |
+|---|---|---|
+| `config.py` | Settings that differ between environments: keys, MongoDB, models, timeouts, upload limit, Whisper options | Editing `.env` (table above) |
+| `constants.py` | Fixed values the code depends on: routes, collection and index names (`products`, `categories`, `category_vector_index`), embedding size (768), SSE stages and progress percentages, keepalive interval, retry count, LLM token budget, product defaults, log format | Editing the file (a code change) |
+| `messages.py` | Every message returned to clients (HTTP error details, SSE progress and error messages, health check messages) | Editing the file |
 
-# Whisper Model
-WHISPER_MODEL_SIZE=small
-WHISPER_DEVICE=cpu
-WHISPER_COMPUTE_TYPE=int8
-```
+The Gemini prompt is in `app/pipeline/prompts.py`. HTTP status codes use FastAPI's named constants (`status.HTTP_400_BAD_REQUEST`, ...).
 
-### Optional Variables (OpenSearch Logging)
+## Project structure
 
-```env
-OPENSEARCH_ENABLED=true
-OPENSEARCH_HOST=localhost
-OPENSEARCH_PORT=9200
-OPENSEARCH_INDEX_PREFIX=voice-logs
-```
-
-## Running the Service
-
-### Development Mode
-
-```bash
-python -m app.main
-```
-
-The service will start on `http://localhost:6001`
-
-### Production Mode
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 6001 --workers 4
-```
-
-## API Endpoints
-
-### POST /voice
-
-Extract products from audio file.
-
-**Request:**
-- Method: POST
-- Content-Type: multipart/form-data
-- Body: Audio file (mp3, wav, m4a, ogg, webm, aac)
-- Max file size: 15MB
-
-**Response:**
-```json
-{
-  "batchId": "uuid-string",
-  "products": [
-    {
-      "name": "Chicken Biryani",
-      "price": 250.0,
-      "batchId": "uuid-string"
-    }
-  ]
-}
-```
-
-**Example using curl:**
-```bash
-curl -X POST http://localhost:6001/voice \
-  -F "file=@audio.mp3"
-```
-
-### GET /products/voice/{batch_id}
-
-Retrieve products by batch ID.
-
-**Response:**
-```json
-[
-  {
-    "id": "product-id",
-    "batchId": "batch-id",
-    "name": "Chicken Biryani",
-    "normalizedName": "chicken biryani",
-    "price": 250.0,
-    "matchedCategory": "Biryani",
-    "matchedCategorySourceId": "category-source-id",
-    "matchedCategoryScore": 0.98,
-    "matchStatus": "AUTO_MAPPED"
-  }
-]
-```
-
-### GET /health
-
-Health check endpoint.
-
-**Response:**
-```json
-{
-  "status": "ok"
-}
-```
-
-## Architecture Flow
+Same layout as the Image-Text-Pdf service: `api/` receives the request, `pipeline/` does the work step by step, `clients/` talks to outside services.
 
 ```
-Audio File Upload
-    ↓
-Whisper Transcription (faster-whisper)
-    ↓
-Raw Text
-    ↓
-Gemini LLM Extraction (product name + price)
-    ↓
-Normalized Product Names (Gemini)
-    ↓
-Embeddings Generation (Gemini embedding model)
-    ↓
-Category Matching (MongoDB Vector Search)
-    ↓
-MongoDB Storage (with classification)
-    ↓
-Return Response with batchId
+app/
+├── main.py                      # App startup: logging, env check, routers
+├── core/                        # Shared setup
+│   ├── app.py                   # FastAPI factory, request log, global error handler
+│   ├── config.py                # Environment settings (.env)
+│   ├── constants.py             # Fixed values: routes, collections, stages, limits, defaults
+│   ├── messages.py              # Messages returned to clients
+│   ├── database.py              # MongoDB connection
+│   └── logging.py               # Log format (text/json), trace id
+├── api/                         # HTTP endpoints
+│   ├── extract_voice.py         # POST /voice – upload checks, SSE progress, runs the pipeline
+│   ├── health.py                # GET /health
+│   ├── test_ui.py               # GET /voice-products-extract-using-ai
+│   └── schemas.py               # SSE progress event
+├── pipeline/                    # Processing steps, in order
+│   ├── transcription.py         # 1. Audio → text (faster-whisper)
+│   ├── prompts.py               # Gemini extraction prompt
+│   ├── product_extraction.py    # 2. Text → products (Gemini call, retries, JSON parsing)
+│   ├── product_normalizer.py    # 3. Fill defaults, build target format
+│   ├── category_matching.py     # 4. Atlas $vectorSearch for the closest category
+│   └── product_storage.py       # 4. Embed product names, match categories, store the batch
+└── clients/
+    └── gemini.py                # Gemini client: embeddings, health check
+static/test_ui.html              # Browser test UI
+scripts/smoke_test.py            # End-to-end check of /voice
 ```
-
-## Database Schema
-
-### Products Collection
-```json
-{
-  "_id": "uuid",
-  "batchId": "uuid",
-  "name": "Chicken Biryani",
-  "normalizedName": "chicken biryani",
-  "price": 250.0,
-  "embedding": [0.1, 0.2, ...],
-  "matchedCategory": "Biryani",
-  "matchedCategorySourceId": "source-id",
-  "matchedCategoryScore": 0.98,
-  "matchStatus": "AUTO_MAPPED"
-}
-```
-
-### Categories Collection
-```json
-{
-  "_id": "category-id",
-  "name": "Biryani",
-  "sourceId": "source-id",
-  "embedding": [0.1, 0.2, ...]
-}
-```
-
-## Category Matching Logic
-
-- **score > 0.95** → AUTO_MAPPED
-- **0.85 ≤ score ≤ 0.95** → PENDING_VENDOR_CONFIRMATION
-- **score < 0.85** → CREATE_NEW_CATEGORY_OR_ADMIN_APPROVAL
-
-## Logging
-
-Logs are sent to:
-- Console (terminal output)
-- OpenSearch (if enabled)
-
-OpenSearch index pattern: `voice-logs-YYYY.MM.DD`
-
-### OpenSearch Setup
-
-#### 1. Download and Install OpenSearch
-
-**Windows:**
-```bash
-# Download OpenSearch for Windows
-# https://opensearch.org/downloads.html
-
-# Extract to: C:\opensearch-3.7.0-windows-x64\opensearch-3.7.0
-```
-
-**Linux/Mac:**
-```bash
-# Download OpenSearch for Linux/Mac
-# https://opensearch.org/downloads.html
-
-# Extract and navigate
-tar -xzf opensearch-3.7.0-linux-x64.tar.gz
-cd opensearch-3.7.0
-```
-
-#### 2. Configure OpenSearch (Disable Security for Development)
-
-Edit `config/opensearch.yml`:
-```yaml
-plugins.security.disabled: true
-```
-
-#### 3. Start OpenSearch
-
-**Windows:**
-```bash
-cd C:\opensearch-3.7.0-windows-x64\opensearch-3.7.0\bin
-.\opensearch.bat
-```
-
-**Linux/Mac:**
-```bash
-./opensearch-3.7.0/bin/opensearch
-```
-
-#### 4. Verify OpenSearch is Running
-
-```bash
-curl http://localhost:9200
-```
-
-Expected response:
-```json
-{
-  "name": "opensearch-node",
-  "cluster_name": "opensearch",
-  "version": {
-    "number": "3.7.0"
-  }
-}
-```
-
-#### 5. Configure OpenSearch Dashboards (Optional)
-
-**Windows:**
-```bash
-cd C:\opensearch-dashboards-3.7.0-windows-x64\opensearch-dashboards-3.7.0\config
-```
-
-Edit `opensearch_dashboards.yml`:
-```yaml
-opensearch_security.enabled: false
-```
-
-**Start Dashboards:**
-```bash
-cd C:\opensearch-dashboards-3.7.0-windows-x64\opensearch-dashboards-3.7.0\bin
-.\opensearch-dashboards.bat
-```
-
-Access Dashboards: http://localhost:5601
-
-#### 6. Create Index Pattern in OpenSearch Dashboards
-
-1. Open http://localhost:5601
-2. Go to **Stack Management** → **Index Patterns**
-3. Click **Create index pattern**
-4. Enter pattern: `voice-logs-*`
-5. Select `@timestamp` as time field
-6. Click **Create index pattern**
-
-#### 7. Verify Logs are Being Sent
-
-```bash
-# Check for voice-logs indices
-curl http://localhost:9200/_cat/indices?v
-
-# Search for logs
-curl http://localhost:9200/voice-logs-*/_search
-```
-
-### OpenSearch Logging Working Process
-
-```
-Voice AI Service (FastAPI)
-    ↓
-Python Logging Module
-    ↓
-OpenSearchHandler (Background Thread)
-    ↓
-Queue (Log Records)
-    ↓
-HTTP POST to OpenSearch
-    ↓
-Index: voice-logs-YYYY.MM.DD
-    ↓
-OpenSearch Dashboards
-    ↓
-Visualize and Query Logs
-```
-
-### Log Document Structure
-
-Each log entry in OpenSearch contains:
-```json
-{
-  "@timestamp": "2026-07-24T08:00:00.000Z",
-  "service": "voice-service",
-  "level": "INFO",
-  "logger": "app.main",
-  "message": "Health check endpoint called",
-  "path": "/path/to/file.py",
-  "line": 177,
-  "function": "health"
-}
-```
-
-## Troubleshooting
-
-### Whisper Model Loading Error
-- First run downloads the model (~500MB for 'small' model)
-- Ensure internet connection for initial download
-- Model cached in `~/.cache/huggingface`
-
-### Gemini API Errors
-- Verify `GEMINI_API_KEY` is set correctly
-- Check API quota and billing enabled
-- Network connectivity to Google services
-
-### MongoDB Connection Error
-- Verify `MONGO_URI` is correct
-- Check IP whitelist in MongoDB Atlas
-- Ensure database user has proper permissions
-
-### OpenSearch Connection Error
-- Set `OPENSEARCH_ENABLED=false` if not using OpenSearch
-- Verify OpenSearch is running on configured host/port
-- Check network connectivity
-
-### File Upload Errors
-- Max file size: 15MB
-- Supported formats: mp3, wav, m4a, ogg, webm, aac
-- Ensure audio contains speech
 
 ## Dependencies
 
-- fastapi==0.115.0
-- uvicorn[standard]==0.30.6
-- faster-whisper>=1.0.0
-- requests==2.32.3
-- pydantic==2.13.4
-- python-multipart==0.0.9
-- pymongo==4.9.2
-- python-dotenv==1.0.1
-- google-genai
-- aiohttp
-
-## Project Structure
-
-```
-voice-ai-service/
-├── app/
-│   ├── __init__.py
-│   ├── config.py              # Configuration and environment variables
-│   ├── main.py                # FastAPI application and endpoints
-│   ├── voice_service.py       # Whisper transcription
-│   ├── extraction.py          # LLM product extraction
-│   ├── normalization.py       # Product name normalization
-│   ├── embeddings.py          # Embedding generation and storage
-│   ├── matching.py            # Category matching logic
-│   ├── database.py            # MongoDB connection
-│   ├── models.py              # Pydantic models
-│   └── logging_config.py      # OpenSearch logging setup
-├── requirements.txt
-├── .env.example
-├── .gitignore
-└── README.md
-```
-
-## License
-
-[Prospect InfoSystem Inc]
-
-
-## Support
-
-For issues and questions, please contact
- [Phone no: +91 96527 96086, +91 62813 70532].
- [EMAIL To: thalluridhanujay@gmail.com , tumati.bhanuprakash947@gmail.com ]
-
-
-
+FastAPI, Uvicorn, faster-whisper, `google-genai`, PyMongo, python-dotenv, python-multipart (see `pyproject.toml`; managed with `uv`).
